@@ -99,7 +99,8 @@
           <label>Quantas unidades nessa pesagem? (ex: 3 garrafas juntas = 3)</label>
           <input id="fQtd" inputmode="numeric" value="1">
           <label id="fValLbl">Peso lido no visor (g)</label>
-          <input id="fVal" inputmode="decimal" placeholder="ex: 740">
+          <input id="fVal" inputmode="decimal" placeholder="a IA preenche — confira">
+          <div class="feed" id="fAi"></div>
           <button class="btn" id="fSalvar">Salvar item ✓</button>
         </div>
       </div>
@@ -147,7 +148,7 @@ let casas=[], itens=[], byBar={}, byId={};
 let contagemId=null, funcId=null, casaId=null, gps={lat:null,lng:null};
 let state={}; // item_id -> {ci_id, nome, via, bips, quantidade}
 let lastScan={code:null,t:0};
-let scanner=null, curVia='balanca_foto', fPhotoFile=null, modalOpen=false;
+let scanner=null, curVia='balanca_foto', fPhotoFile=null, modalOpen=false, fPhotoUrl=null, aiResult=null;
 
 // ---------- init ----------
 (async()=>{
@@ -286,12 +287,33 @@ $('mSalvar').onclick=async()=>{
 function pickVia(btn){ document.querySelectorAll('#fTipo button').forEach(b=>b.classList.remove('on')); btn.classList.add('on'); curVia=btn.dataset.via;
   $('fValLbl').textContent = curVia==='balanca_foto'?'Peso lido no visor (g)':'Nível da garrafa (%)'; }
 $('fCam').onclick=()=>$('fFile').click();
-$('fFile').onchange=e=>{ fPhotoFile=e.target.files[0]; if(!fPhotoFile)return;
-  const url=URL.createObjectURL(fPhotoFile);
-  $('fPrev').innerHTML=`<img src="${url}" style="width:100%;max-height:240px;object-fit:contain;margin:10px 0;border:1px solid var(--line);border-radius:8px">`;
-  $('fForm').classList.remove('hidden'); };
+$('fFile').onchange=async e=>{ fPhotoFile=e.target.files[0]; if(!fPhotoFile)return;
+  fPhotoUrl=null; aiResult=null;
+  $('fPrev').innerHTML=`<img src="${URL.createObjectURL(fPhotoFile)}" style="width:100%;max-height:240px;object-fit:contain;margin:10px 0;border:1px solid var(--line);border-radius:8px">`;
+  $('fForm').classList.remove('hidden');
+  $('fAi').className='feed'; $('fAi').textContent='⬆️ subindo foto…';
+  try{
+    const path=`fotos/${contagemId}/${Date.now()}_${Math.round(Math.random()*1e6)}.jpg`;
+    const {error:eu}=await sb.storage.from('inventario').upload(path,fPhotoFile,{contentType:fPhotoFile.type||'image/jpeg',upsert:true});
+    if(eu)throw eu;
+    fPhotoUrl=sb.storage.from('inventario').getPublicUrl(path).data.publicUrl;
+    lerFotoIA();
+  }catch(e){ $('fAi').className='feed new'; $('fAi').textContent='⚠️ erro ao subir a foto: '+e.message; }
+};
+async function lerFotoIA(){
+  aiResult=null; $('fAi').className='feed'; $('fAi').textContent='🤖 IA lendo a foto…';
+  try{
+    const r=await fetch(`${SB_URL}/functions/v1/ler-foto`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fotoUrl:fPhotoUrl,tipo:curVia})});
+    const d=await r.json(); aiResult=d;
+    if(d.erro){ $('fAi').className='feed new'; $('fAi').textContent='⚠️ IA indisponível — digite o valor na mão.'; return; }
+    if(d.legivel===false){ $('fAi').className='feed new'; $('fAi').textContent='⚠️ Foto ruim/ilegível — tire de novo ou digite na mão.'+(d.descricao?' (vejo: '+d.descricao+')':''); return; }
+    if(d.valor!=null) $('fVal').value=d.valor;
+    $('fAi').className='feed ok';
+    $('fAi').textContent=`🤖 IA leu: ${d.valor}${curVia==='balanca_foto'?'g':'%'}`+(d.descricao?` · vejo: "${d.descricao}"`:'');
+  }catch(e){ $('fAi').className='feed new'; $('fAi').textContent='⚠️ IA fora do ar — digite o valor na mão.'; }
+}
 $('fSalvar').onclick=async()=>{
-  if(!fPhotoFile){alert('Tira a foto primeiro.');return;}
+  if(!fPhotoUrl){alert('Tira a foto primeiro (e espera subir).');return;}
   const nome=$('fItem').value.trim(); if(!nome){alert('Escreve o que é (ex: Picanha).');return;}
   const qtd=parseInt($('fQtd').value)||1;
   $('fSalvar').disabled=true; $('fSalvar').textContent='salvando…';
@@ -299,19 +321,18 @@ $('fSalvar').onclick=async()=>{
     // acha ou cria item
     let item=itens.find(i=>i.nome.toLowerCase()===nome.toLowerCase());
     if(!item){ const {data,error}=await sb.from('inv_itens').insert({casa_id:casaId,nome,categoria:(curVia==='balanca_foto'?'insumo_cozinha':'bebida_aberta'),metodo_contagem:curVia}).select('id,nome,codigo_barras').single(); if(error)throw error; item=data; itens.push(item); byId[item.id]=item; }
-    // upload foto
-    const path=`fotos/${contagemId}/${Date.now()}_${Math.round(Math.random()*1e6)}.jpg`;
-    const {error:eu}=await sb.storage.from('inventario').upload(path,fPhotoFile,{contentType:fPhotoFile.type||'image/jpeg',upsert:true});
-    if(eu)throw eu;
-    const url=sb.storage.from('inventario').getPublicUrl(path).data.publicUrl;
     const val=$('fVal').value?parseFloat($('fVal').value.replace(',','.')):null;
-    const row={contagem_id:contagemId,item_id:item.id,contado_via:curVia,foto_url:url,quantidade:qtd};
+    const iaVal = aiResult && typeof aiResult.valor==='number' ? aiResult.valor : null;
+    const row={contagem_id:contagemId,item_id:item.id,contado_via:curVia,foto_url:fPhotoUrl,quantidade:qtd,
+      ia_valor_lido: iaVal,
+      ia_conferiu: !!(aiResult && !aiResult.erro && aiResult.legivel!==false),
+      ia_divergiu: !!(aiResult && iaVal!=null && val!=null && Math.abs(iaVal-val) > Math.max(2, val*0.05))};
     if(curVia==='balanca_foto') row.peso_g=val; else row.nivel_pct=val;
     const {data:ci,error}=await sb.from('inv_contagem_itens').insert(row).select('id').single();
     if(error)throw error;
-    state['foto_'+ci.id]={ci_id:ci.id,nome:`${item.nome} (${qtd}un${val?', '+val+(curVia==='balanca_foto'?'g':'%'):''})`,via:curVia,quantidade:qtd,foto_url:url};
+    state['foto_'+ci.id]={ci_id:ci.id,nome:`${item.nome} (${qtd}un${val?', '+val+(curVia==='balanca_foto'?'g':'%'):''})`,via:curVia,quantidade:qtd,foto_url:fPhotoUrl};
     // limpa
-    $('fItem').value='';$('fVal').value='';$('fQtd').value='1';$('fPrev').innerHTML='';$('fForm').classList.add('hidden');fPhotoFile=null;
+    $('fItem').value='';$('fVal').value='';$('fQtd').value='1';$('fPrev').innerHTML='';$('fAi').textContent='';$('fForm').classList.add('hidden');fPhotoFile=null;fPhotoUrl=null;aiResult=null;
     render();
   }catch(e){ alert('Erro: '+e.message); }
   finally{ $('fSalvar').disabled=false; $('fSalvar').textContent='Salvar item ✓'; }
