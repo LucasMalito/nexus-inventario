@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Contagem — Nexus Inventário</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  :root{--bg:#0e1116;--card:#161b22;--line:#2b333d;--txt:#e6edf3;--dim:#8b949e;
+        --accent:#2ea043;--blue:#1f6feb;--warn:#d29922;--err:#f85149}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  body{margin:0;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--txt);font-size:16px}
+  .wrap{max-width:560px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column}
+  .top{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;background:var(--bg);z-index:5}
+  .top b{font-size:15px}
+  .badge{font-size:11px;background:#3d1d1d;color:#ff7b72;border:1px solid #5c2b2b;border-radius:20px;padding:3px 9px}
+  .pad{padding:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:14px}
+  label{display:block;font-size:13px;color:var(--dim);margin:12px 0 5px}
+  input,select{width:100%;background:#0d1117;color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:13px;font-size:16px}
+  .btn{width:100%;background:var(--accent);color:#fff;border:0;border-radius:12px;padding:16px;font-size:17px;font-weight:700;cursor:pointer;margin-top:8px}
+  .btn:active{transform:scale(.99)}
+  .btn.blue{background:var(--blue)} .btn.gray{background:#21262d;border:1px solid var(--line)} .btn.red{background:var(--err)}
+  .btn:disabled{opacity:.5}
+  .tabs{display:flex;gap:10px;padding:12px 16px 0}
+  .tab{flex:1;text-align:center;padding:13px;border-radius:12px 12px 0 0;background:#161b22;border:1px solid var(--line);border-bottom:0;color:var(--dim);font-weight:600}
+  .tab.on{background:var(--blue);color:#fff;border-color:var(--blue)}
+  #reader{width:100%;border-radius:12px;overflow:hidden;background:#000;min-height:240px}
+  .feed{text-align:center;font-size:18px;font-weight:700;padding:14px;min-height:54px}
+  .feed.ok{color:var(--accent)} .feed.new{color:var(--warn)}
+  .list{flex:1}
+  .item{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line)}
+  .item .nm{flex:1;font-size:15px}
+  .item .via{font-size:11px;color:var(--dim);display:block}
+  .qty{font-size:20px;font-weight:800;min-width:42px;text-align:center}
+  .step{width:38px;height:38px;border-radius:10px;border:1px solid var(--line);background:#21262d;color:#fff;font-size:20px;font-weight:700;margin:0 4px}
+  .foot{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:12px 16px}
+  .hidden{display:none}
+  .thumb{width:54px;height:54px;border-radius:8px;object-fit:cover;border:1px solid var(--line)}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:20px;z-index:50}
+  .modal .card{width:100%;max-width:420px;margin:0}
+  .seg{display:flex;gap:8px;margin-top:8px}
+  .seg button{flex:1;padding:12px;border-radius:10px;background:#21262d;border:1px solid var(--line);color:var(--txt);font-weight:600}
+  .seg button.on{background:var(--blue);border-color:var(--blue);color:#fff}
+  small{color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ===== TELA INICIAL ===== -->
+  <div id="start" class="pad">
+    <div class="card">
+      <b style="font-size:18px">📦 Contagem de Estoque</b>
+      <div><small id="conn">conectando…</small></div>
+      <label>Casa</label><select id="casa"></select>
+      <label>Seu nome (quem está contando)</label>
+      <input id="nome" placeholder="ex: João" autocomplete="off">
+      <label>Setor que vai contar</label>
+      <input id="setor" placeholder="ex: Bar, Adega, Cozinha" autocomplete="off">
+      <button class="btn" id="iniciar">Iniciar contagem ▶</button>
+      <p><small>📍 O sistema vai pedir sua localização e registrar quem contou e quando. Você <b>não verá</b> o estoque esperado — só conta o que tem de verdade.</small></p>
+    </div>
+  </div>
+
+  <!-- ===== TELA DE CONTAGEM ===== -->
+  <div id="count" class="hidden" style="display:flex;flex-direction:column;flex:1">
+    <div class="top">
+      <div><b id="hCasa"></b> <small id="hSetor"></small><br><small id="hNome"></small></div>
+      <span class="badge">🔴 CONTAGEM CEGA</span>
+    </div>
+
+    <div class="tabs">
+      <div class="tab on" id="tabBip" onclick="setTab('bip')">📷 Bipar</div>
+      <div class="tab" id="tabFoto" onclick="setTab('foto')">⚖️ Foto (balança/garrafa)</div>
+    </div>
+
+    <!-- BIPAR -->
+    <div id="paneBip" class="pad">
+      <div id="reader"></div>
+      <div class="feed" id="feed">Aponte a câmera pro código de barras…</div>
+    </div>
+
+    <!-- FOTO -->
+    <div id="paneFoto" class="pad hidden">
+      <div class="card">
+        <label>Item</label>
+        <input id="fItem" list="itemList" placeholder="digite e selecione o item" autocomplete="off">
+        <datalist id="itemList"></datalist>
+        <div class="seg" id="fTipo">
+          <button class="on" data-via="balanca_foto" onclick="pickVia(this)">⚖️ Balança (peso)</button>
+          <button data-via="nivel_foto" onclick="pickVia(this)">🍾 Garrafa (nível)</button>
+        </div>
+        <label id="fValLbl">Peso lido no visor (g) — opcional, a IA confere depois</label>
+        <input id="fVal" inputmode="decimal" placeholder="ex: 740">
+        <button class="btn blue" id="fCam">📷 Tirar foto do item/visor</button>
+        <input type="file" id="fFile" accept="image/*" capture="environment" class="hidden">
+        <div id="fPrev"></div>
+        <button class="btn" id="fSalvar" disabled>Salvar item ✓</button>
+      </div>
+    </div>
+
+    <div class="list" id="list"></div>
+
+    <div class="foot">
+      <button class="btn red" id="finalizar">🔒 Finalizar e enviar contagem</button>
+      <p style="text-align:center;margin:8px 0 0"><small id="resumo"></small></p>
+    </div>
+  </div>
+
+  <!-- ===== TELA FINAL ===== -->
+  <div id="done" class="hidden pad">
+    <div class="card" style="text-align:center">
+      <div style="font-size:46px">🔒✅</div>
+      <b style="font-size:18px">Contagem enviada e travada!</b>
+      <p><small>Ninguém edita mais. O sistema já vai cruzar com o estoque esperado e avisar o gerente se tiver divergência.</small></p>
+      <div id="doneResumo"></div>
+      <button class="btn gray" onclick="location.reload()">Nova contagem</button>
+    </div>
+  </div>
+
+</div>
+
+<!-- modal código novo -->
+<div id="modal" class="modal hidden">
+  <div class="card">
+    <b>Código não cadastrado</b>
+    <p><small>O código <b id="mCode"></b> não está no sistema. Qual é o produto?</small></p>
+    <input id="mNome" placeholder="nome do produto" autocomplete="off">
+    <button class="btn" id="mSalvar">Cadastrar e contar +1</button>
+    <button class="btn gray" id="mCancel">Cancelar</button>
+  </div>
+</div>
+
+<script>
+const SB_URL="https://kuyhkltbwlkvtgbabscv.supabase.co";
+const SB_KEY="sb_publishable_dW-JZ00n74dSLCrznBJ6gw_K8AE1VIq";
+const sb=supabase.createClient(SB_URL,SB_KEY);
+const $=id=>document.getElementById(id);
+
+let casas=[], itens=[], byBar={}, byId={};
+let contagemId=null, funcId=null, casaId=null, gps={lat:null,lng:null};
+let state={}; // item_id -> {ci_id, nome, via, bips, quantidade}
+let lastScan={code:null,t:0};
+let scanner=null, curVia='balanca_foto', fPhotoFile=null;
+
+// ---------- init ----------
+(async()=>{
+  $('data')&&($('data').value=new Date().toISOString().slice(0,10));
+  try{
+    const {data,error}=await sb.from('inv_casas').select('id,apelido,nome').order('apelido');
+    if(error)throw error;
+    casas=data;
+    $('casa').innerHTML=data.map(c=>`<option value="${c.id}">${c.apelido} — ${c.nome}</option>`).join('');
+    $('conn').textContent='🟢 conectado';
+  }catch(e){ $('conn').textContent='🔴 sem conexão: '+e.message; }
+})();
+
+// ---------- iniciar ----------
+$('iniciar').onclick=async()=>{
+  const nome=$('nome').value.trim(), setor=$('setor').value.trim();
+  casaId=$('casa').value;
+  if(!nome){alert('Põe seu nome.');return;}
+  $('iniciar').disabled=true; $('iniciar').textContent='iniciando…';
+  try{
+    // GPS (não trava se negar)
+    await new Promise(res=>{
+      if(!navigator.geolocation)return res();
+      navigator.geolocation.getCurrentPosition(
+        p=>{gps={lat:p.coords.latitude,lng:p.coords.longitude};res();},
+        ()=>res(),{timeout:6000});
+    });
+    // funcionário (acha ou cria)
+    let {data:f}=await sb.from('inv_funcionarios').select('id').eq('casa_id',casaId).ilike('nome',nome).limit(1);
+    if(f&&f.length){funcId=f[0].id;}
+    else{ const {data:nf,error}=await sb.from('inv_funcionarios').insert({casa_id:casaId,nome,papel:'contador'}).select('id').single(); if(error)throw error; funcId=nf.id; }
+    // contagem
+    const {data:c,error:ec}=await sb.from('inv_contagens').insert({
+      casa_id:casaId,funcionario_id:funcId,setor,tipo:'diaria',status:'aberta',
+      gps_lat:gps.lat,gps_lng:gps.lng}).select('id').single();
+    if(ec)throw ec; contagemId=c.id;
+    // carrega itens da casa
+    const {data:it}=await sb.from('inv_itens').select('id,nome,codigo_barras,metodo_contagem').eq('casa_id',casaId).eq('ativo',true);
+    itens=it||[]; byBar={};byId={};
+    itens.forEach(i=>{ if(i.codigo_barras)byBar[i.codigo_barras]=i; byId[i.id]=i; });
+    $('itemList').innerHTML=itens.map(i=>`<option value="${i.nome}">`).join('');
+    // mostra tela
+    $('hCasa').textContent=casas.find(c=>c.id===casaId).apelido;
+    $('hSetor').textContent=setor?('· '+setor):'';
+    $('hNome').textContent=nome;
+    $('start').classList.add('hidden'); $('count').classList.remove('hidden');
+    startScanner();
+  }catch(e){ alert('Erro ao iniciar: '+e.message); $('iniciar').disabled=false; $('iniciar').textContent='Iniciar contagem ▶'; }
+};
+
+// ---------- tabs ----------
+function setTab(t){
+  $('tabBip').classList.toggle('on',t==='bip');
+  $('tabFoto').classList.toggle('on',t==='foto');
+  $('paneBip').classList.toggle('hidden',t!=='bip');
+  $('paneFoto').classList.toggle('hidden',t!=='foto');
+  if(t==='bip')startScanner(); else stopScanner();
+}
+
+// ---------- scanner ----------
+function startScanner(){
+  if(scanner)return;
+  scanner=new Html5Qrcode("reader",{verbose:false});
+  scanner.start({facingMode:"environment"},{fps:10,qrbox:{width:260,height:160}},onScan,()=>{})
+    .catch(e=>{$('feed').textContent='⚠️ Não consegui abrir a câmera: '+e;});
+}
+function stopScanner(){ if(scanner){scanner.stop().then(()=>scanner.clear()).catch(()=>{}); scanner=null;} }
+
+function onScan(code){
+  const now=Date.now();
+  if(code===lastScan.code && now-lastScan.t<1500) return; // anti-duplo
+  lastScan={code,t:now};
+  navigator.vibrate&&navigator.vibrate(60);
+  const item=byBar[code];
+  if(item){ bip(item); }
+  else{ $('mCode').textContent=code; $('mNome').value=''; $('modal').classList.remove('hidden'); $('mNome').focus(); window._pendingCode=code; }
+}
+
+// ---------- bip ----------
+async function bip(item){
+  let s=state[item.id];
+  try{
+    if(s){ s.bips++; s.quantidade=s.bips; await sb.from('inv_contagem_itens').update({bips:s.bips,quantidade:s.bips}).eq('id',s.ci_id); }
+    else{
+      const {data,error}=await sb.from('inv_contagem_itens').insert({contagem_id:contagemId,item_id:item.id,contado_via:'bip',bips:1,quantidade:1}).select('id').single();
+      if(error)throw error;
+      state[item.id]={ci_id:data.id,nome:item.nome,via:'bip',bips:1,quantidade:1};
+    }
+    const q=state[item.id].quantidade;
+    feed('ok',`✓ ${item.nome} — total ${q}`);
+    render();
+  }catch(e){ feed('new','erro: '+e.message); }
+}
+function feed(cls,msg){ const f=$('feed'); f.className='feed '+cls; f.textContent=msg; }
+
+// ---------- modal código novo ----------
+$('mCancel').onclick=()=>$('modal').classList.add('hidden');
+$('mSalvar').onclick=async()=>{
+  const nome=$('mNome').value.trim(); if(!nome){alert('Põe o nome.');return;}
+  try{
+    const {data,error}=await sb.from('inv_itens').insert({casa_id:casaId,nome,codigo_barras:window._pendingCode,categoria:'bebida_fechada',metodo_contagem:'bip'}).select('id,nome,codigo_barras').single();
+    if(error)throw error;
+    byBar[data.codigo_barras]=data; byId[data.id]=data; itens.push(data);
+    $('modal').classList.add('hidden');
+    bip(data);
+  }catch(e){ alert('Erro ao cadastrar: '+e.message); }
+};
+
+// ---------- foto ----------
+function pickVia(btn){ document.querySelectorAll('#fTipo button').forEach(b=>b.classList.remove('on')); btn.classList.add('on'); curVia=btn.dataset.via;
+  $('fValLbl').textContent = curVia==='balanca_foto'?'Peso lido no visor (g) — opcional, a IA confere depois':'Nível da garrafa (%) — opcional, a IA confere depois'; }
+$('fCam').onclick=()=>$('fFile').click();
+$('fFile').onchange=e=>{ fPhotoFile=e.target.files[0]; if(!fPhotoFile)return;
+  const url=URL.createObjectURL(fPhotoFile);
+  $('fPrev').innerHTML=`<img src="${url}" class="thumb" style="width:100%;max-height:220px;object-fit:contain;margin-top:10px">`;
+  $('fSalvar').disabled=false; };
+$('fSalvar').onclick=async()=>{
+  const nome=$('fItem').value.trim(); if(!nome){alert('Escolhe o item.');return;}
+  if(!fPhotoFile){alert('Tira a foto.');return;}
+  $('fSalvar').disabled=true; $('fSalvar').textContent='salvando…';
+  try{
+    // acha ou cria item
+    let item=itens.find(i=>i.nome.toLowerCase()===nome.toLowerCase());
+    if(!item){ const {data,error}=await sb.from('inv_itens').insert({casa_id:casaId,nome,categoria:(curVia==='balanca_foto'?'insumo_cozinha':'bebida_aberta'),metodo_contagem:curVia}).select('id,nome,codigo_barras').single(); if(error)throw error; item=data; itens.push(item); byId[item.id]=item; }
+    // upload foto
+    const path=`fotos/${contagemId}/${Date.now()}_${Math.round(Math.random()*1e6)}.jpg`;
+    const {error:eu}=await sb.storage.from('inventario').upload(path,fPhotoFile,{contentType:fPhotoFile.type||'image/jpeg',upsert:true});
+    if(eu)throw eu;
+    const url=sb.storage.from('inventario').getPublicUrl(path).data.publicUrl;
+    const val=$('fVal').value?parseFloat($('fVal').value.replace(',','.')):null;
+    const row={contagem_id:contagemId,item_id:item.id,contado_via:curVia,foto_url:url};
+    if(curVia==='balanca_foto'){row.peso_g=val;row.quantidade=val;} else {row.nivel_pct=val;row.quantidade=val;}
+    const {data:ci,error}=await sb.from('inv_contagem_itens').insert(row).select('id').single();
+    if(error)throw error;
+    state['foto_'+ci.id]={ci_id:ci.id,nome:item.nome,via:curVia,quantidade:val,foto_url:url};
+    // limpa
+    $('fItem').value='';$('fVal').value='';$('fPrev').innerHTML='';fPhotoFile=null;
+    render();
+    alert('✓ Item salvo com foto.');
+  }catch(e){ alert('Erro: '+e.message); }
+  finally{ $('fSalvar').disabled=false; $('fSalvar').textContent='Salvar item ✓'; }
+};
+
+// ---------- lista ----------
+function render(){
+  const keys=Object.keys(state);
+  $('list').innerHTML=keys.map(k=>{ const s=state[k]; const isBip=s.via==='bip';
+    const via = s.via==='bip'?'bipado':(s.via==='balanca_foto'?'foto balança':'foto garrafa');
+    const val = s.quantidade==null?'—':s.quantidade;
+    return `<div class="item">
+      ${s.foto_url?`<img class="thumb" src="${s.foto_url}">`:''}
+      <div class="nm">${s.nome}<span class="via">${via}</span></div>
+      ${isBip?`<button class="step" onclick="adj('${k}',-1)">−</button>`:''}
+      <span class="qty">${val}</span>
+      ${isBip?`<button class="step" onclick="adj('${k}',1)">+</button>`:''}
+    </div>`;}).join('');
+  const total=keys.length;
+  $('resumo').textContent=total?`${total} item(ns) contado(s) nessa sessão`:'';
+}
+async function adj(k,d){ const s=state[k]; if(s.via!=='bip')return;
+  s.bips=Math.max(0,s.bips+d); s.quantidade=s.bips;
+  await sb.from('inv_contagem_itens').update({bips:s.bips,quantidade:s.bips}).eq('id',s.ci_id);
+  if(s.bips===0){ await sb.from('inv_contagem_itens').delete().eq('id',s.ci_id); delete state[k]; }
+  render();
+}
+
+// ---------- finalizar ----------
+$('finalizar').onclick=async()=>{
+  if(!Object.keys(state).length){alert('Conta pelo menos 1 item.');return;}
+  if(!confirm('Finalizar e TRAVAR a contagem? Não dá pra editar depois.'))return;
+  $('finalizar').disabled=true;
+  try{
+    stopScanner();
+    await sb.from('inv_contagens').update({status:'travada',enviada_em:new Date().toISOString(),gps_lat:gps.lat,gps_lng:gps.lng}).eq('id',contagemId);
+    $('count').classList.add('hidden'); $('done').classList.remove('hidden');
+    $('doneResumo').innerHTML=`<p><small>${Object.keys(state).length} itens · setor ${$('hSetor').textContent.replace('· ','')||'-'} · ${$('hNome').textContent}</small></p>`;
+  }catch(e){ alert('Erro ao finalizar: '+e.message); $('finalizar').disabled=false; }
+};
+</script>
+</body>
+</html>

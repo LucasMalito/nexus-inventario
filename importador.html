@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nexus Inventário — Importador do Everest</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{ --bg:#0e1116; --card:#161b22; --line:#2b333d; --txt:#e6edf3; --dim:#8b949e;
+         --accent:#2ea043; --accent2:#1f6feb; --warn:#d29922; --err:#f85149; }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--txt);font-size:15px}
+  header{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px}
+  header h1{font-size:18px;margin:0}
+  header .pill{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:20px;padding:3px 10px}
+  main{max-width:1000px;margin:0 auto;padding:24px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;margin-bottom:18px}
+  .card h2{font-size:15px;margin:0 0 14px;display:flex;align-items:center;gap:8px}
+  .num{background:var(--accent2);color:#fff;width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:600}
+  label{display:block;font-size:13px;color:var(--dim);margin:10px 0 4px}
+  select,input[type=date]{width:100%;background:#0d1117;color:var(--txt);border:1px solid var(--line);border-radius:8px;padding:9px 10px;font-size:14px}
+  .row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+  .drop{border:2px dashed var(--line);border-radius:12px;padding:34px;text-align:center;color:var(--dim);cursor:pointer;transition:.15s}
+  .drop:hover,.drop.over{border-color:var(--accent2);color:var(--txt);background:#0d1117}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:10px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px}
+  th{color:var(--dim);font-weight:600}
+  .btn{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:12px 22px;font-size:15px;font-weight:600;cursor:pointer}
+  .btn:disabled{opacity:.4;cursor:not-allowed}
+  .btn.sec{background:#21262d;border:1px solid var(--line)}
+  .map-grid{display:grid;grid-template-columns:200px 1fr;gap:10px 16px;align-items:center}
+  .map-grid .req{color:var(--err)}
+  .hidden{display:none}
+  .log{font-family:ui-monospace,monospace;font-size:13px;background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:14px;white-space:pre-wrap;max-height:260px;overflow:auto}
+  .ok{color:var(--accent)} .er{color:var(--err)} .wn{color:var(--warn)} .dim{color:var(--dim)}
+  small{color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <h1>📦 Nexus Inventário</h1>
+  <span class="pill">Importador do estoque do Everest</span>
+  <span class="pill" id="conn">conectando…</span>
+</header>
+<main>
+
+  <!-- PASSO 1 -->
+  <div class="card">
+    <h2><span class="num">1</span> Pra qual casa e dia é esse estoque?</h2>
+    <div class="row">
+      <div>
+        <label>Casa (unidade)</label>
+        <select id="casa"></select>
+      </div>
+      <div>
+        <label>Data de referência</label>
+        <input type="date" id="data">
+      </div>
+      <div>
+        <label>Fonte</label>
+        <select id="fonte"><option value="everest_planilha">Planilha Everest</option></select>
+      </div>
+    </div>
+    <div class="row" style="margin-top:6px">
+      <div>
+        <label>Categoria padrão (itens novos)</label>
+        <select id="catpad">
+          <option value="bebida_fechada">bebida_fechada</option>
+          <option value="bebida_aberta">bebida_aberta</option>
+          <option value="destilado_caro">destilado_caro</option>
+          <option value="insumo_cozinha">insumo_cozinha</option>
+          <option value="cd_caixa">cd_caixa</option>
+        </select>
+      </div>
+      <div>
+        <label>Método de contagem padrão (itens novos)</label>
+        <select id="metpad">
+          <option value="bip">bip (código de barras)</option>
+          <option value="balanca_foto">balanca_foto</option>
+          <option value="nivel_foto">nivel_foto</option>
+          <option value="master_foto">master_foto</option>
+        </select>
+      </div>
+      <div></div>
+    </div>
+    <small>O "estoque atual" da planilha vira o <b>esperado</b> — o número que o funcionário não vê e que o sistema compara com a contagem.</small>
+  </div>
+
+  <!-- PASSO 2 -->
+  <div class="card">
+    <h2><span class="num">2</span> Solte a planilha do Everest (Excel ou CSV)</h2>
+    <div class="drop" id="drop">📂 Arraste o arquivo aqui ou clique pra escolher
+      <div><small id="fname">nenhum arquivo</small></div>
+    </div>
+    <input type="file" id="file" class="hidden" accept=".xlsx,.xls,.csv">
+  </div>
+
+  <!-- PASSO 3 -->
+  <div class="card hidden" id="mapcard">
+    <h2><span class="num">3</span> Aponte qual coluna é o quê</h2>
+    <div class="map-grid">
+      <label>Nome do item <span class="req">*</span></label><select id="m_nome"></select>
+      <label>Estoque atual <span class="req">*</span></label><select id="m_estoque"></select>
+      <label>Código de barras</label><select id="m_barras"></select>
+      <label>Valor unitário (R$)</label><select id="m_valor"></select>
+      <label>Categoria (opcional)</label><select id="m_categoria"></select>
+      <label>Setor (opcional)</label><select id="m_setor"></select>
+    </div>
+    <h2 style="margin-top:20px">Prévia (primeiras 8 linhas)</h2>
+    <div style="overflow:auto"><table id="preview"></table></div>
+    <p><small id="rowcount"></small></p>
+    <button class="btn" id="importar">⬆️ Importar pro sistema</button>
+  </div>
+
+  <!-- RESULTADO -->
+  <div class="card hidden" id="rescard">
+    <h2><span class="num">✓</span> Resultado</h2>
+    <div class="log" id="log"></div>
+  </div>
+
+</main>
+<script>
+const SB_URL = "https://kuyhkltbwlkvtgbabscv.supabase.co";
+const SB_KEY = "sb_publishable_dW-JZ00n74dSLCrznBJ6gw_K8AE1VIq";
+const sb = supabase.createClient(SB_URL, SB_KEY);
+
+let rows = [];      // linhas da planilha (array de objetos)
+let headers = [];   // nomes das colunas detectadas
+
+// ---------- helpers ----------
+const $ = id => document.getElementById(id);
+const norm = s => String(s||'').trim().toLowerCase().replace(/\s+/g,' ');
+function parseNum(v){
+  if(v==null||v==='') return null;
+  if(typeof v==='number') return v;
+  let s=String(v).trim().replace(/[^\d.,-]/g,'');
+  if(s.indexOf(',')>-1 && s.indexOf('.')>-1) s=s.replace(/\./g,'').replace(',','.');
+  else if(s.indexOf(',')>-1) s=s.replace(',','.');
+  const n=parseFloat(s); return isNaN(n)?null:n;
+}
+function guess(cands){
+  for(const h of headers){ const n=norm(h);
+    for(const c of cands){ if(n.includes(c)) return h; } }
+  return '';
+}
+function fillSelect(sel, withEmpty){
+  sel.innerHTML = (withEmpty?'<option value="">— nenhum —</option>':'') +
+    headers.map(h=>`<option value="${h}">${h}</option>`).join('');
+}
+
+// ---------- init ----------
+(async function init(){
+  $('data').value = new Date().toISOString().slice(0,10);
+  try{
+    const { data, error } = await sb.from('inv_casas').select('id,apelido,nome').order('apelido');
+    if(error) throw error;
+    $('casa').innerHTML = data.map(c=>`<option value="${c.id}">${c.apelido} — ${c.nome}</option>`).join('');
+    $('conn').textContent = '🟢 conectado ('+data.length+' casas)';
+    $('conn').style.color = 'var(--accent)';
+  }catch(e){
+    $('conn').textContent = '🔴 erro de conexão';
+    $('conn').style.color = 'var(--err)';
+    alert('Não consegui ler as casas: '+e.message);
+  }
+})();
+
+// ---------- file handling ----------
+const drop=$('drop'), file=$('file');
+drop.onclick=()=>file.click();
+drop.ondragover=e=>{e.preventDefault();drop.classList.add('over')};
+drop.ondragleave=()=>drop.classList.remove('over');
+drop.ondrop=e=>{e.preventDefault();drop.classList.remove('over');if(e.dataTransfer.files[0])handleFile(e.dataTransfer.files[0])};
+file.onchange=e=>{if(e.target.files[0])handleFile(e.target.files[0])};
+
+function handleFile(f){
+  $('fname').textContent = f.name;
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    const wb=XLSX.read(ev.target.result,{type:'array'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    rows = XLSX.utils.sheet_to_json(ws,{defval:'',raw:false});
+    if(!rows.length){ alert('A planilha parece vazia.'); return; }
+    headers = Object.keys(rows[0]);
+    setupMapping();
+  };
+  reader.readAsArrayBuffer(f);
+}
+
+function setupMapping(){
+  fillSelect($('m_nome'),false);
+  fillSelect($('m_estoque'),false);
+  ['m_barras','m_valor','m_categoria','m_setor'].forEach(id=>fillSelect($(id),true));
+  // auto-guess
+  $('m_nome').value     = guess(['descri','produto','item','nome','mercadoria']) || headers[0];
+  $('m_estoque').value  = guess(['saldo','estoque','qtd','quantidade','atual','disponiv']) || headers[headers.length-1];
+  $('m_barras').value   = guess(['barra','ean','gtin','cod. barra','codbarra']);
+  $('m_valor').value    = guess(['custo','valor','preç','preco','unit']);
+  $('m_categoria').value= guess(['categ','grupo','famil']);
+  $('m_setor').value    = guess(['setor','local','depósit','deposito']);
+  renderPreview();
+  $('rowcount').textContent = rows.length+' linhas na planilha.';
+  $('mapcard').classList.remove('hidden');
+  $('mapcard').scrollIntoView({behavior:'smooth'});
+}
+
+function renderPreview(){
+  const cols=headers.slice(0,8);
+  let html='<tr>'+cols.map(h=>`<th>${h}</th>`).join('')+'</tr>';
+  rows.slice(0,8).forEach(r=>{ html+='<tr>'+cols.map(h=>`<td>${r[h]}</td>`).join('')+'</tr>'; });
+  $('preview').innerHTML=html;
+}
+
+// ---------- import ----------
+$('importar').onclick=async()=>{
+  const casaId=$('casa').value, dataRef=$('data').value, fonte=$('fonte').value;
+  const catPad=$('catpad').value, metPad=$('metpad').value;
+  const cNome=$('m_nome').value, cEst=$('m_estoque').value, cBar=$('m_barras').value,
+        cVal=$('m_valor').value, cCat=$('m_categoria').value, cSet=$('m_setor').value;
+  if(!cNome||!cEst){ alert('Aponte pelo menos Nome e Estoque atual.'); return; }
+
+  const logEl=$('log'); $('rescard').classList.remove('hidden');
+  const log=(m,cls='')=>{ logEl.innerHTML+=`<span class="${cls}">${m}</span>\n`; logEl.scrollTop=logEl.scrollHeight; };
+  logEl.innerHTML=''; $('importar').disabled=true;
+
+  try{
+    log('Lendo itens já cadastrados nessa casa…','dim');
+    const { data:existing, error:e1 } = await sb.from('inv_itens').select('id,nome,codigo_barras').eq('casa_id',casaId);
+    if(e1) throw e1;
+    const byBar={}, byNome={};
+    (existing||[]).forEach(it=>{ if(it.codigo_barras) byBar[it.codigo_barras]=it.id; byNome[norm(it.nome)]=it.id; });
+    log(`  ${existing.length} itens já existiam.`,'dim');
+
+    // monta linhas válidas
+    const valid=[]; let pulado=0;
+    rows.forEach(r=>{
+      const nome=String(r[cNome]||'').trim();
+      const est=parseNum(r[cEst]);
+      if(!nome){ pulado++; return; }
+      valid.push({
+        nome, est: est==null?0:est,
+        barras: cBar?String(r[cBar]||'').trim()||null:null,
+        valor: cVal?parseNum(r[cVal]):null,
+        categoria: cCat&&r[cCat]?String(r[cCat]).trim():catPad,
+        setor: cSet&&r[cSet]?String(r[cSet]).trim():null
+      });
+    });
+    log(`Linhas válidas: ${valid.length} (puladas sem nome: ${pulado}).`);
+
+    // descobre quais são novos
+    const novos=[];
+    valid.forEach(v=>{
+      const id = (v.barras&&byBar[v.barras]) || byNome[norm(v.nome)];
+      if(!id){
+        novos.push({ casa_id:casaId, nome:v.nome, codigo_barras:v.barras,
+          categoria:v.categoria, metodo_contagem:metPad, setor:v.setor,
+          valor_unitario_rs:v.valor||0, unidade_medida:'un' });
+      }
+    });
+    log(`Itens novos a cadastrar: ${novos.length}…`);
+
+    // insere novos em lotes de 500
+    let inseridos=[];
+    for(let i=0;i<novos.length;i+=500){
+      const lote=novos.slice(i,i+500);
+      const { data, error } = await sb.from('inv_itens').insert(lote).select('id,nome,codigo_barras');
+      if(error) throw error;
+      inseridos=inseridos.concat(data);
+    }
+    inseridos.forEach(it=>{ if(it.codigo_barras) byBar[it.codigo_barras]=it.id; byNome[norm(it.nome)]=it.id; });
+    log(`  ${inseridos.length} itens novos cadastrados.`,'ok');
+
+    // monta esperado
+    const esperado=[];
+    valid.forEach(v=>{
+      const id=(v.barras&&byBar[v.barras])||byNome[norm(v.nome)];
+      if(!id) return;
+      esperado.push({ casa_id:casaId, item_id:id, data_ref:dataRef,
+        estoque_inicial:v.est, estoque_esperado:v.est, fonte });
+    });
+
+    log(`Gravando o "esperado" do dia (${esperado.length} itens)…`);
+    let grav=0;
+    for(let i=0;i<esperado.length;i+=500){
+      const lote=esperado.slice(i,i+500);
+      const { error } = await sb.from('inv_esperado').upsert(lote,{onConflict:'casa_id,item_id,data_ref'});
+      if(error) throw error;
+      grav+=lote.length;
+    }
+    log(`  ${grav} linhas de esperado gravadas para ${dataRef}.`,'ok');
+    log('\n✅ IMPORTAÇÃO CONCLUÍDA. O estoque esperado já está no sistema.','ok');
+  }catch(e){
+    log('\n❌ ERRO: '+(e.message||e),'er');
+    log('(me manda esse erro que eu ajusto)','dim');
+  }finally{
+    $('importar').disabled=false;
+  }
+};
+</script>
+</body>
+</html>
