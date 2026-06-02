@@ -99,7 +99,7 @@
           <div id="fGarrafaBox" class="hidden">
             <label>Quantas garrafas nessa pesagem?</label>
             <input id="fQtd" inputmode="numeric" value="1">
-            <label>Peso de 1 garrafa VAZIA (g) — pra descontar o vidro</label>
+            <label>Peso de 1 garrafa VAZIA (g) — só na 1ª vez deste produto, depois é automático</label>
             <input id="fTara" inputmode="decimal" placeholder="ex: 1071">
           </div>
           <label id="fValLbl">Peso lido no visor (g)</label>
@@ -340,14 +340,16 @@ $('fSalvar').onclick=async()=>{
   $('fSalvar').disabled=true; $('fSalvar').textContent='salvando…';
   try{
     let item=itens.find(i=>i.nome.toLowerCase()===nome.toLowerCase());
+    const effTara = tara || (item&&item.tara_garrafa_g) || null;
+    if(garrafa && !effTara){ alert('Garrafa nova: pesa 1 VAZIA deste produto e põe o peso no campo "garrafa vazia". Só nessa 1ª vez — depois fica automático.'); $('fSalvar').disabled=false; $('fSalvar').textContent='Salvar item ✓'; return; }
     if(!item){
       const novo={casa_id:casaId,nome,categoria:(garrafa?'bebida_aberta':'insumo_cozinha'),metodo_contagem:curVia};
-      if(garrafa&&tara) novo.tara_garrafa_g=tara;
+      if(garrafa&&effTara) novo.tara_garrafa_g=effTara;
       const {data,error}=await sb.from('inv_itens').insert(novo).select('id,nome,codigo_barras,tara_garrafa_g').single(); if(error)throw error; item=data; itens.push(item); byId[item.id]=item;
     } else if(garrafa&&tara&&item.tara_garrafa_g!==tara){
       await sb.from('inv_itens').update({tara_garrafa_g:tara}).eq('id',item.id); item.tara_garrafa_g=tara;
     }
-    const liquido = (garrafa&&total!=null&&tara!=null)?(total-tara*qtd):null;
+    const liquido = (garrafa&&total!=null&&effTara!=null)?(total-effTara*qtd):null;
     const iaVal = aiResult && typeof aiResult.valor==='number' ? aiResult.valor : null;
     const row={contagem_id:contagemId,item_id:item.id,contado_via:curVia,foto_url:fPhotoUrl,quantidade:qtd,peso_g:total,
       ia_valor_lido: iaVal,
