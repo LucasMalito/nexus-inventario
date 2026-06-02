@@ -252,6 +252,7 @@ function feed(cls,msg){ const f=$('feed'); f.className='feed '+cls; f.textConten
 
 // ---------- modal código novo ----------
 $('mCancel').onclick=closeModal;
+$('modal').onclick=(e)=>{ if(e.target.id==='modal') closeModal(); };  // clicar fora fecha
 $('mSalvar').onclick=async()=>{
   const nome=$('mNome').value.trim(); if(!nome){alert('Põe o nome.');return;}
   try{
