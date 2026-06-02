@@ -79,25 +79,29 @@
     <!-- BIPAR -->
     <div id="paneBip" class="pad">
       <div id="reader"></div>
+      <button class="btn gray" id="bipAtivar" onclick="startScanner(true)">📷 Ativar / reativar câmera</button>
       <div class="feed" id="feed">Aponte a câmera pro código de barras…</div>
     </div>
 
     <!-- FOTO -->
     <div id="paneFoto" class="pad hidden">
       <div class="card">
-        <label>Item</label>
-        <input id="fItem" list="itemList" placeholder="digite e selecione o item" autocomplete="off">
-        <datalist id="itemList"></datalist>
-        <div class="seg" id="fTipo">
-          <button class="on" data-via="balanca_foto" onclick="pickVia(this)">⚖️ Balança (peso)</button>
-          <button data-via="nivel_foto" onclick="pickVia(this)">🍾 Garrafa (nível)</button>
-        </div>
-        <label id="fValLbl">Peso lido no visor (g) — opcional, a IA confere depois</label>
-        <input id="fVal" inputmode="decimal" placeholder="ex: 740">
-        <button class="btn blue" id="fCam">📷 Tirar foto do item/visor</button>
+        <button class="btn blue" id="fCam">📷 Tirar foto (balança / garrafa)</button>
         <input type="file" id="fFile" accept="image/*" capture="environment" class="hidden">
         <div id="fPrev"></div>
-        <button class="btn" id="fSalvar" disabled>Salvar item ✓</button>
+        <div id="fForm" class="hidden">
+          <div class="seg" id="fTipo">
+            <button class="on" data-via="balanca_foto" onclick="pickVia(this)">⚖️ Balança (peso)</button>
+            <button data-via="nivel_foto" onclick="pickVia(this)">🍾 Garrafa (nível)</button>
+          </div>
+          <label>O que é? (ex: Picanha, Red Label)</label>
+          <input id="fItem" placeholder="nome do produto" autocomplete="off">
+          <label>Quantas unidades nessa pesagem? (ex: 3 garrafas juntas = 3)</label>
+          <input id="fQtd" inputmode="numeric" value="1">
+          <label id="fValLbl">Peso lido no visor (g)</label>
+          <input id="fVal" inputmode="decimal" placeholder="ex: 740">
+          <button class="btn" id="fSalvar">Salvar item ✓</button>
+        </div>
       </div>
     </div>
 
@@ -184,7 +188,6 @@ $('iniciar').onclick=async()=>{
     const {data:it}=await sb.from('inv_itens').select('id,nome,codigo_barras,metodo_contagem').eq('casa_id',casaId).eq('ativo',true);
     itens=it||[]; byBar={};byId={};
     itens.forEach(i=>{ if(i.codigo_barras)byBar[i.codigo_barras]=i; byId[i.id]=i; });
-    $('itemList').innerHTML=itens.map(i=>`<option value="${i.nome}">`).join('');
     // mostra tela
     $('hCasa').textContent=casas.find(c=>c.id===casaId).apelido;
     $('hSetor').textContent=setor?('· '+setor):'';
@@ -204,11 +207,26 @@ function setTab(t){
 }
 
 // ---------- scanner ----------
-function startScanner(){
-  if(scanner)return;
+async function startScanner(force){
+  if(typeof Html5Qrcode==='undefined'){ $('feed').className='feed new'; $('feed').textContent='⚠️ Biblioteca da câmera não carregou (sem internet?). Recarrega a página.'; return; }
+  if(scanner && !force) return;
+  if(scanner){ try{await scanner.stop();await scanner.clear();}catch(e){} scanner=null; }
+  $('feed').className='feed'; $('feed').textContent='abrindo câmera…';
   scanner=new Html5Qrcode("reader",{verbose:false});
-  scanner.start({facingMode:"environment"},{fps:10,qrbox:{width:260,height:160}},onScan,()=>{})
-    .catch(e=>{$('feed').textContent='⚠️ Não consegui abrir a câmera: '+e;});
+  const cfg={fps:10,qrbox:{width:260,height:160}};
+  try{
+    await scanner.start({facingMode:"environment"},cfg,onScan,()=>{});
+    $('feed').textContent='Aponte a câmera pro código de barras…';
+  }catch(e){
+    try{ // fallback: pega qualquer câmera disponível (PC/webcam sem traseira)
+      const cams=await Html5Qrcode.getCameras();
+      if(cams&&cams.length){ await scanner.start(cams[cams.length-1].id,cfg,onScan,()=>{}); $('feed').textContent='Aponte a câmera pro código de barras…'; }
+      else throw new Error('nenhuma câmera encontrada');
+    }catch(e2){
+      scanner=null; $('feed').className='feed new';
+      $('feed').textContent='⚠️ Câmera bloqueada. Toque em "Ativar câmera" e PERMITA o acesso quando o navegador pedir. ('+(e2.message||e2)+')';
+    }
+  }
 }
 function stopScanner(){ if(scanner){scanner.stop().then(()=>scanner.clear()).catch(()=>{}); scanner=null;} }
 
@@ -266,15 +284,16 @@ $('mSalvar').onclick=async()=>{
 
 // ---------- foto ----------
 function pickVia(btn){ document.querySelectorAll('#fTipo button').forEach(b=>b.classList.remove('on')); btn.classList.add('on'); curVia=btn.dataset.via;
-  $('fValLbl').textContent = curVia==='balanca_foto'?'Peso lido no visor (g) — opcional, a IA confere depois':'Nível da garrafa (%) — opcional, a IA confere depois'; }
+  $('fValLbl').textContent = curVia==='balanca_foto'?'Peso lido no visor (g)':'Nível da garrafa (%)'; }
 $('fCam').onclick=()=>$('fFile').click();
 $('fFile').onchange=e=>{ fPhotoFile=e.target.files[0]; if(!fPhotoFile)return;
   const url=URL.createObjectURL(fPhotoFile);
-  $('fPrev').innerHTML=`<img src="${url}" class="thumb" style="width:100%;max-height:220px;object-fit:contain;margin-top:10px">`;
-  $('fSalvar').disabled=false; };
+  $('fPrev').innerHTML=`<img src="${url}" style="width:100%;max-height:240px;object-fit:contain;margin:10px 0;border:1px solid var(--line);border-radius:8px">`;
+  $('fForm').classList.remove('hidden'); };
 $('fSalvar').onclick=async()=>{
-  const nome=$('fItem').value.trim(); if(!nome){alert('Escolhe o item.');return;}
-  if(!fPhotoFile){alert('Tira a foto.');return;}
+  if(!fPhotoFile){alert('Tira a foto primeiro.');return;}
+  const nome=$('fItem').value.trim(); if(!nome){alert('Escreve o que é (ex: Picanha).');return;}
+  const qtd=parseInt($('fQtd').value)||1;
   $('fSalvar').disabled=true; $('fSalvar').textContent='salvando…';
   try{
     // acha ou cria item
@@ -286,15 +305,14 @@ $('fSalvar').onclick=async()=>{
     if(eu)throw eu;
     const url=sb.storage.from('inventario').getPublicUrl(path).data.publicUrl;
     const val=$('fVal').value?parseFloat($('fVal').value.replace(',','.')):null;
-    const row={contagem_id:contagemId,item_id:item.id,contado_via:curVia,foto_url:url};
-    if(curVia==='balanca_foto'){row.peso_g=val;row.quantidade=val;} else {row.nivel_pct=val;row.quantidade=val;}
+    const row={contagem_id:contagemId,item_id:item.id,contado_via:curVia,foto_url:url,quantidade:qtd};
+    if(curVia==='balanca_foto') row.peso_g=val; else row.nivel_pct=val;
     const {data:ci,error}=await sb.from('inv_contagem_itens').insert(row).select('id').single();
     if(error)throw error;
-    state['foto_'+ci.id]={ci_id:ci.id,nome:item.nome,via:curVia,quantidade:val,foto_url:url};
+    state['foto_'+ci.id]={ci_id:ci.id,nome:`${item.nome} (${qtd}un${val?', '+val+(curVia==='balanca_foto'?'g':'%'):''})`,via:curVia,quantidade:qtd,foto_url:url};
     // limpa
-    $('fItem').value='';$('fVal').value='';$('fPrev').innerHTML='';fPhotoFile=null;
+    $('fItem').value='';$('fVal').value='';$('fQtd').value='1';$('fPrev').innerHTML='';$('fForm').classList.add('hidden');fPhotoFile=null;
     render();
-    alert('✓ Item salvo com foto.');
   }catch(e){ alert('Erro: '+e.message); }
   finally{ $('fSalvar').disabled=false; $('fSalvar').textContent='Salvar item ✓'; }
 };
