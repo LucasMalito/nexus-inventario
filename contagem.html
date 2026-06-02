@@ -36,7 +36,7 @@
   .qty{font-size:20px;font-weight:800;min-width:42px;text-align:center}
   .step{width:38px;height:38px;border-radius:10px;border:1px solid var(--line);background:#21262d;color:#fff;font-size:20px;font-weight:700;margin:0 4px}
   .foot{position:sticky;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:12px 16px}
-  .hidden{display:none}
+  .hidden{display:none !important}
   .thumb{width:54px;height:54px;border-radius:8px;object-fit:cover;border:1px solid var(--line)}
   .modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;padding:20px;z-index:50}
   .modal .card{width:100%;max-width:420px;margin:0}
@@ -147,7 +147,7 @@ let scanner=null, curVia='balanca_foto', fPhotoFile=null, modalOpen=false;
 
 // ---------- init ----------
 (async()=>{
-  $('data')&&($('data').value=new Date().toISOString().slice(0,10));
+  $('data')&&($('data').value=new Date().toISOString().slice(0,10)); $('modal').style.display='none';
   try{
     const {data,error}=await sb.from('inv_casas').select('id,apelido,nome').order('apelido');
     if(error)throw error;
@@ -225,10 +225,10 @@ function onScan(code){
 function openModal(code){
   modalOpen=true; try{scanner&&scanner.pause(true);}catch(e){}  // pausa a câmera
   window._pendingCode=code; $('mCode').textContent=code; $('mNome').value='';
-  $('modal').classList.remove('hidden'); setTimeout(()=>$('mNome').focus(),100);
+  $('modal').style.display='flex'; $('modal').classList.remove('hidden'); setTimeout(()=>$('mNome').focus(),100);
 }
 function closeModal(){
-  $('modal').classList.add('hidden'); modalOpen=false;
+  $('modal').style.display='none'; $('modal').classList.add('hidden'); modalOpen=false;
   lastScan={code:window._pendingCode,t:Date.now()};            // evita re-disparar o mesmo
   try{scanner&&scanner.resume();}catch(e){}
 }
