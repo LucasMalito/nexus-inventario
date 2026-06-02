@@ -86,21 +86,26 @@
     <!-- FOTO -->
     <div id="paneFoto" class="pad hidden">
       <div class="card">
-        <button class="btn blue" id="fCam">📷 Tirar foto (balança / garrafa)</button>
+        <div class="seg" id="fTipo">
+          <button class="on" data-via="balanca_foto" onclick="pickVia(this)">🍖 Balança alimentos</button>
+          <button data-via="garrafa_peso" onclick="pickVia(this)">🍾 Balança garrafas abertas</button>
+        </div>
+        <button class="btn blue" id="fCam">📷 Tirar foto do visor</button>
         <input type="file" id="fFile" accept="image/*" capture="environment" class="hidden">
         <div id="fPrev"></div>
         <div id="fForm" class="hidden">
-          <div class="seg" id="fTipo">
-            <button class="on" data-via="balanca_foto" onclick="pickVia(this)">⚖️ Balança (peso)</button>
-            <button data-via="nivel_foto" onclick="pickVia(this)">🍾 Garrafa (nível)</button>
-          </div>
           <label>O que é? (ex: Picanha, Red Label)</label>
           <input id="fItem" placeholder="nome do produto" autocomplete="off">
-          <label>Quantas unidades nessa pesagem? (ex: 3 garrafas juntas = 3)</label>
-          <input id="fQtd" inputmode="numeric" value="1">
+          <div id="fGarrafaBox" class="hidden">
+            <label>Quantas garrafas nessa pesagem?</label>
+            <input id="fQtd" inputmode="numeric" value="1">
+            <label>Peso de 1 garrafa VAZIA (g) — pra descontar o vidro</label>
+            <input id="fTara" inputmode="decimal" placeholder="ex: 1071">
+          </div>
           <label id="fValLbl">Peso lido no visor (g)</label>
           <input id="fVal" inputmode="decimal" placeholder="a IA preenche — confira">
           <div class="feed" id="fAi"></div>
+          <div class="feed ok" id="fLiquido"></div>
           <button class="btn" id="fSalvar">Salvar item ✓</button>
         </div>
       </div>
@@ -186,7 +191,7 @@ $('iniciar').onclick=async()=>{
       gps_lat:gps.lat,gps_lng:gps.lng}).select('id').single();
     if(ec)throw ec; contagemId=c.id;
     // carrega itens da casa
-    const {data:it}=await sb.from('inv_itens').select('id,nome,codigo_barras,metodo_contagem').eq('casa_id',casaId).eq('ativo',true);
+    const {data:it}=await sb.from('inv_itens').select('id,nome,codigo_barras,metodo_contagem,tara_garrafa_g').eq('casa_id',casaId).eq('ativo',true);
     itens=it||[]; byBar={};byId={};
     itens.forEach(i=>{ if(i.codigo_barras)byBar[i.codigo_barras]=i; byId[i.id]=i; });
     // mostra tela
@@ -285,7 +290,20 @@ $('mSalvar').onclick=async()=>{
 
 // ---------- foto ----------
 function pickVia(btn){ document.querySelectorAll('#fTipo button').forEach(b=>b.classList.remove('on')); btn.classList.add('on'); curVia=btn.dataset.via;
-  $('fValLbl').textContent = curVia==='balanca_foto'?'Peso lido no visor (g)':'Nível da garrafa (%)'; }
+  $('fGarrafaBox').classList.toggle('hidden', curVia!=='garrafa_peso');
+  $('fValLbl').textContent='Peso lido no visor (g)'; recalcLiquido(); }
+function recalcLiquido(){
+  if(curVia!=='garrafa_peso'){ $('fLiquido').textContent=''; return; }
+  const total=parseFloat(($('fVal').value||'').replace(',','.'));
+  const tara=parseFloat(($('fTara').value||'').replace(',','.'));
+  const qtd=parseInt($('fQtd').value)||1;
+  if(!isNaN(total)&&!isNaN(tara)){ const liq=total-tara*qtd; $('fLiquido').textContent=`💧 Líquido (${total}g − ${qtd}×${tara}g de vidro) = ${liq.toFixed(0)} g`; }
+  else $('fLiquido').textContent='';
+}
+['fVal','fTara','fQtd'].forEach(id=>{ const el=$(id); if(el) el.addEventListener('input',recalcLiquido); });
+$('fItem').addEventListener('change',()=>{ if(curVia!=='garrafa_peso')return;
+  const it=itens.find(i=>i.nome.toLowerCase()===$('fItem').value.trim().toLowerCase());
+  if(it&&it.tara_garrafa_g&&!$('fTara').value){ $('fTara').value=it.tara_garrafa_g; recalcLiquido(); } });
 $('fCam').onclick=()=>$('fFile').click();
 $('fFile').onchange=async e=>{ fPhotoFile=e.target.files[0]; if(!fPhotoFile)return;
   fPhotoUrl=null; aiResult=null;
@@ -303,36 +321,43 @@ $('fFile').onchange=async e=>{ fPhotoFile=e.target.files[0]; if(!fPhotoFile)retu
 async function lerFotoIA(){
   aiResult=null; $('fAi').className='feed'; $('fAi').textContent='🤖 IA lendo a foto…';
   try{
-    const r=await fetch(`${SB_URL}/functions/v1/ler-foto`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fotoUrl:fPhotoUrl,tipo:curVia})});
+    const r=await fetch(`${SB_URL}/functions/v1/ler-foto`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fotoUrl:fPhotoUrl,tipo:'balanca_foto'})});
     const d=await r.json(); aiResult=d;
     if(d.erro){ $('fAi').className='feed new'; $('fAi').textContent='⚠️ IA indisponível — digite o valor na mão.'; return; }
     if(d.legivel===false){ $('fAi').className='feed new'; $('fAi').textContent='⚠️ Foto ruim/ilegível — tire de novo ou digite na mão.'+(d.descricao?' (vejo: '+d.descricao+')':''); return; }
     if(d.valor!=null) $('fVal').value=d.valor;
     $('fAi').className='feed ok';
-    $('fAi').textContent=`🤖 IA leu: ${d.valor}${curVia==='balanca_foto'?'g':'%'}`+(d.descricao?` · vejo: "${d.descricao}"`:'');
+    $('fAi').textContent=`🤖 IA leu: ${d.valor} g`+(d.descricao?` · vejo: "${d.descricao}"`:''); recalcLiquido();
   }catch(e){ $('fAi').className='feed new'; $('fAi').textContent='⚠️ IA fora do ar — digite o valor na mão.'; }
 }
 $('fSalvar').onclick=async()=>{
   if(!fPhotoUrl){alert('Tira a foto primeiro (e espera subir).');return;}
   const nome=$('fItem').value.trim(); if(!nome){alert('Escreve o que é (ex: Picanha).');return;}
-  const qtd=parseInt($('fQtd').value)||1;
+  const garrafa = curVia==='garrafa_peso';
+  const qtd = garrafa ? (parseInt($('fQtd').value)||1) : 1;
+  const tara = garrafa ? (parseFloat(($('fTara').value||'').replace(',','.'))||null) : null;
+  const total = $('fVal').value?parseFloat($('fVal').value.replace(',','.')):null;
   $('fSalvar').disabled=true; $('fSalvar').textContent='salvando…';
   try{
-    // acha ou cria item
     let item=itens.find(i=>i.nome.toLowerCase()===nome.toLowerCase());
-    if(!item){ const {data,error}=await sb.from('inv_itens').insert({casa_id:casaId,nome,categoria:(curVia==='balanca_foto'?'insumo_cozinha':'bebida_aberta'),metodo_contagem:curVia}).select('id,nome,codigo_barras').single(); if(error)throw error; item=data; itens.push(item); byId[item.id]=item; }
-    const val=$('fVal').value?parseFloat($('fVal').value.replace(',','.')):null;
+    if(!item){
+      const novo={casa_id:casaId,nome,categoria:(garrafa?'bebida_aberta':'insumo_cozinha'),metodo_contagem:curVia};
+      if(garrafa&&tara) novo.tara_garrafa_g=tara;
+      const {data,error}=await sb.from('inv_itens').insert(novo).select('id,nome,codigo_barras,tara_garrafa_g').single(); if(error)throw error; item=data; itens.push(item); byId[item.id]=item;
+    } else if(garrafa&&tara&&item.tara_garrafa_g!==tara){
+      await sb.from('inv_itens').update({tara_garrafa_g:tara}).eq('id',item.id); item.tara_garrafa_g=tara;
+    }
+    const liquido = (garrafa&&total!=null&&tara!=null)?(total-tara*qtd):null;
     const iaVal = aiResult && typeof aiResult.valor==='number' ? aiResult.valor : null;
-    const row={contagem_id:contagemId,item_id:item.id,contado_via:curVia,foto_url:fPhotoUrl,quantidade:qtd,
+    const row={contagem_id:contagemId,item_id:item.id,contado_via:curVia,foto_url:fPhotoUrl,quantidade:qtd,peso_g:total,
       ia_valor_lido: iaVal,
       ia_conferiu: !!(aiResult && !aiResult.erro && aiResult.legivel!==false),
-      ia_divergiu: !!(aiResult && iaVal!=null && val!=null && Math.abs(iaVal-val) > Math.max(2, val*0.05))};
-    if(curVia==='balanca_foto') row.peso_g=val; else row.nivel_pct=val;
+      ia_divergiu: !!(aiResult && iaVal!=null && total!=null && Math.abs(iaVal-total) > Math.max(2, total*0.05))};
     const {data:ci,error}=await sb.from('inv_contagem_itens').insert(row).select('id').single();
     if(error)throw error;
-    state['foto_'+ci.id]={ci_id:ci.id,nome:`${item.nome} (${qtd}un${val?', '+val+(curVia==='balanca_foto'?'g':'%'):''})`,via:curVia,quantidade:qtd,foto_url:fPhotoUrl};
-    // limpa
-    $('fItem').value='';$('fVal').value='';$('fQtd').value='1';$('fPrev').innerHTML='';$('fAi').textContent='';$('fForm').classList.add('hidden');fPhotoFile=null;fPhotoUrl=null;aiResult=null;
+    const label = garrafa ? `${item.nome} (${qtd} garrafa(s)${liquido!=null?', '+liquido.toFixed(0)+'g líq':''})` : `${item.nome}${total!=null?' ('+total+'g)':''}`;
+    state['foto_'+ci.id]={ci_id:ci.id,nome:label,via:curVia,quantidade:qtd,foto_url:fPhotoUrl};
+    $('fItem').value='';$('fVal').value='';$('fQtd').value='1';$('fTara').value='';$('fPrev').innerHTML='';$('fAi').textContent='';$('fLiquido').textContent='';$('fForm').classList.add('hidden');fPhotoFile=null;fPhotoUrl=null;aiResult=null;
     render();
   }catch(e){ alert('Erro: '+e.message); }
   finally{ $('fSalvar').disabled=false; $('fSalvar').textContent='Salvar item ✓'; }
