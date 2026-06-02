@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Painel — Conferência de Contagens</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root{--bg:#0e1116;--card:#161b22;--line:#2b333d;--txt:#e6edf3;--dim:#8b949e;--accent:#2ea043;--blue:#1f6feb;--warn:#d29922;--err:#f85149}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--txt);font-size:15px}
+  header{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  header h1{font-size:17px;margin:0}
+  .pill{font-size:12px;color:var(--dim);border:1px solid var(--line);border-radius:20px;padding:3px 10px}
+  main{max-width:1000px;margin:0 auto;padding:18px}
+  .ct{background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:12px;overflow:hidden}
+  .ct-head{padding:14px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px}
+  .ct-head:hover{background:#1b222b}
+  .ct-head b{font-size:15px}
+  .ct-head .meta{font-size:12px;color:var(--dim)}
+  .tag{font-size:11px;border-radius:6px;padding:2px 7px;border:1px solid var(--line)}
+  .tag.travada{color:var(--accent);border-color:#2c4} .tag.aberta{color:var(--warn)}
+  .ct-body{border-top:1px solid var(--line);display:none}
+  .ct-body.open{display:block}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:middle}
+  th{color:var(--dim);font-weight:600;font-size:12px}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .thumb{width:46px;height:46px;border-radius:6px;object-fit:cover;border:1px solid var(--line);cursor:pointer}
+  .viaT{font-size:11px;color:var(--dim)}
+  .div{color:var(--err);font-weight:700}
+  .ok{color:var(--accent)}
+  .refresh{margin-left:auto;background:#21262d;border:1px solid var(--line);color:var(--txt);border-radius:8px;padding:8px 14px;cursor:pointer}
+  small{color:var(--dim)}
+  .empty{padding:30px;text-align:center;color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <h1>📋 Conferência de Contagens</h1>
+  <span class="pill" id="conn">conectando…</span>
+  <button class="refresh" onclick="load()">🔄 Atualizar</button>
+</header>
+<main id="lista"><div class="empty">carregando…</div></main>
+
+<script>
+const SB_URL="https://kuyhkltbwlkvtgbabscv.supabase.co";
+const SB_KEY="sb_publishable_dW-JZ00n74dSLCrznBJ6gw_K8AE1VIq";
+const sb=supabase.createClient(SB_URL,SB_KEY);
+const $=id=>document.getElementById(id);
+const fmt=d=>{ try{return new Date(d).toLocaleString('pt-BR');}catch(e){return d;} };
+
+async function load(){
+  $('lista').innerHTML='<div class="empty">carregando…</div>';
+  try{
+    const {data:cts,error}=await sb.from('inv_contagens')
+      .select('id,setor,tipo,status,criada_em,enviada_em,inv_casas(apelido),inv_funcionarios(nome)')
+      .order('criada_em',{ascending:false}).limit(50);
+    if(error)throw error;
+    $('conn').textContent='🟢 conectado';
+    if(!cts.length){ $('lista').innerHTML='<div class="empty">Nenhuma contagem ainda.</div>'; return; }
+    $('lista').innerHTML=cts.map(c=>cardHtml(c)).join('');
+  }catch(e){ $('conn').textContent='🔴 erro'; $('lista').innerHTML='<div class="empty">Erro: '+e.message+'</div>'; }
+}
+
+function cardHtml(c){
+  const casa=c.inv_casas?.apelido||'?', quem=c.inv_funcionarios?.nome||'?';
+  return `<div class="ct">
+    <div class="ct-head" onclick="toggle('${c.id}')">
+      <div>
+        <b>${casa}</b> · ${quem} ${c.setor?('· '+c.setor):''}
+        <div class="meta">${fmt(c.criada_em)}</div>
+      </div>
+      <span class="tag ${c.status}">${c.status}</span>
+    </div>
+    <div class="ct-body" id="b_${c.id}"><div class="empty">…</div></div>
+  </div>`;
+}
+
+const loaded={};
+async function toggle(id){
+  const body=$('b_'+id);
+  const open=body.classList.toggle('open');
+  if(open && !loaded[id]){ loaded[id]=true; await loadItens(id,body); }
+}
+
+async function loadItens(id,body){
+  try{
+    const {data:its,error}=await sb.from('inv_contagem_itens')
+      .select('contado_via,quantidade,peso_g,nivel_pct,foto_url,ia_valor_lido,ia_divergiu,inv_itens(nome,tara_garrafa_g)')
+      .eq('contagem_id',id).order('criado_em');
+    if(error)throw error;
+    if(!its.length){ body.innerHTML='<div class="empty">sem itens</div>'; return; }
+    let rows=its.map(it=>{
+      const nome=it.inv_itens?.nome||'?';
+      const tara=it.inv_itens?.tara_garrafa_g;
+      const via = it.contado_via==='bip'?'bipado':(it.contado_via==='garrafa_peso'?'garrafas (peso)':(it.contado_via==='balanca_foto'?'alimentos (peso)':it.contado_via));
+      let contado='—';
+      if(it.contado_via==='bip') contado=`${it.quantidade} un`;
+      else if(it.contado_via==='garrafa_peso'){
+        const liq=(it.peso_g!=null&&tara!=null)?(it.peso_g-tara*(it.quantidade||1)):null;
+        contado = `${it.quantidade} grf · ${it.peso_g??'?'}g total`+(liq!=null?` · <b class="ok">${liq.toFixed(0)}g líq</b>`:` · <span class="div">vidro não descontado</span>`);
+      } else contado=`${it.peso_g??'?'} g`;
+      const ia = it.ia_valor_lido!=null ? (it.ia_valor_lido+(it.ia_divergiu?' <span class="div">⚠️ divergiu</span>':' <span class="ok">✓</span>')) : '—';
+      const foto = it.foto_url?`<img class="thumb" src="${it.foto_url}" onclick="window.open('${it.foto_url}')">`:'—';
+      return `<tr><td>${nome}<div class="viaT">${via}</div></td><td>${contado}</td><td class="num">${ia}</td><td>${foto}</td></tr>`;
+    }).join('');
+    body.innerHTML=`<table><tr><th>Item</th><th>Contado</th><th>IA leu</th><th>Foto</th></tr>${rows}</table>`;
+  }catch(e){ body.innerHTML='<div class="empty">erro: '+e.message+'</div>'; }
+}
+
+load();
+</script>
+</body>
+</html>
