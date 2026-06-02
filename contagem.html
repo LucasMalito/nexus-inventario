@@ -143,7 +143,7 @@ let casas=[], itens=[], byBar={}, byId={};
 let contagemId=null, funcId=null, casaId=null, gps={lat:null,lng:null};
 let state={}; // item_id -> {ci_id, nome, via, bips, quantidade}
 let lastScan={code:null,t:0};
-let scanner=null, curVia='balanca_foto', fPhotoFile=null;
+let scanner=null, curVia='balanca_foto', fPhotoFile=null, modalOpen=false;
 
 // ---------- init ----------
 (async()=>{
@@ -213,13 +213,24 @@ function startScanner(){
 function stopScanner(){ if(scanner){scanner.stop().then(()=>scanner.clear()).catch(()=>{}); scanner=null;} }
 
 function onScan(code){
+  if(modalOpen) return;                       // não lê enquanto o popup tá aberto
   const now=Date.now();
   if(code===lastScan.code && now-lastScan.t<1500) return; // anti-duplo
   lastScan={code,t:now};
   navigator.vibrate&&navigator.vibrate(60);
   const item=byBar[code];
   if(item){ bip(item); }
-  else{ $('mCode').textContent=code; $('mNome').value=''; $('modal').classList.remove('hidden'); $('mNome').focus(); window._pendingCode=code; }
+  else{ openModal(code); }
+}
+function openModal(code){
+  modalOpen=true; try{scanner&&scanner.pause(true);}catch(e){}  // pausa a câmera
+  window._pendingCode=code; $('mCode').textContent=code; $('mNome').value='';
+  $('modal').classList.remove('hidden'); setTimeout(()=>$('mNome').focus(),100);
+}
+function closeModal(){
+  $('modal').classList.add('hidden'); modalOpen=false;
+  lastScan={code:window._pendingCode,t:Date.now()};            // evita re-disparar o mesmo
+  try{scanner&&scanner.resume();}catch(e){}
 }
 
 // ---------- bip ----------
@@ -240,14 +251,14 @@ async function bip(item){
 function feed(cls,msg){ const f=$('feed'); f.className='feed '+cls; f.textContent=msg; }
 
 // ---------- modal código novo ----------
-$('mCancel').onclick=()=>$('modal').classList.add('hidden');
+$('mCancel').onclick=closeModal;
 $('mSalvar').onclick=async()=>{
   const nome=$('mNome').value.trim(); if(!nome){alert('Põe o nome.');return;}
   try{
     const {data,error}=await sb.from('inv_itens').insert({casa_id:casaId,nome,codigo_barras:window._pendingCode,categoria:'bebida_fechada',metodo_contagem:'bip'}).select('id,nome,codigo_barras').single();
     if(error)throw error;
     byBar[data.codigo_barras]=data; byId[data.id]=data; itens.push(data);
-    $('modal').classList.add('hidden');
+    closeModal();
     bip(data);
   }catch(e){ alert('Erro ao cadastrar: '+e.message); }
 };
