@@ -87,15 +87,17 @@
     <div id="paneFoto" class="pad hidden">
       <div class="card">
         <div class="seg" id="fTipo">
-          <button class="on" data-via="balanca_foto" onclick="pickVia(this)">🍖 Balança alimentos</button>
-          <button data-via="garrafa_peso" onclick="pickVia(this)">🍾 Balança garrafas abertas</button>
+          <button class="on" data-via="balanca_foto" onclick="pickVia(this)">🍖 Balança</button>
+          <button data-via="garrafa_peso" onclick="pickVia(this)">🍾 Garrafas</button>
+          <button data-via="unidades_foto" onclick="pickVia(this)">📦 Unidades</button>
         </div>
-        <button class="btn blue" id="fCam">📷 Tirar foto do visor</button>
+        <button class="btn blue" id="fCam">📷 Tirar foto</button>
         <input type="file" id="fFile" accept="image/*" capture="environment" class="hidden">
         <div id="fPrev"></div>
         <div id="fForm" class="hidden">
           <label>O que é? (ex: Picanha, Red Label)</label>
-          <input id="fItem" placeholder="nome do produto" autocomplete="off">
+          <input id="fItem" list="itensList" placeholder="nome do produto" autocomplete="off">
+          <datalist id="itensList"></datalist>
           <div id="fGarrafaBox" class="hidden">
             <label>Quantas garrafas nessa pesagem?</label>
             <input id="fQtd" inputmode="numeric" value="1">
@@ -194,6 +196,7 @@ $('iniciar').onclick=async()=>{
     const {data:it}=await sb.from('inv_itens').select('id,nome,codigo_barras,metodo_contagem,tara_garrafa_g').eq('casa_id',casaId).eq('ativo',true);
     itens=it||[]; byBar={};byId={};
     itens.forEach(i=>{ if(i.codigo_barras)byBar[i.codigo_barras]=i; byId[i.id]=i; });
+    refreshDL();
     // mostra tela
     $('hCasa').textContent=casas.find(c=>c.id===casaId).apelido;
     $('hSetor').textContent=setor?('· '+setor):'';
@@ -282,16 +285,18 @@ $('mSalvar').onclick=async()=>{
   try{
     const {data,error}=await sb.from('inv_itens').insert({casa_id:casaId,nome,codigo_barras:window._pendingCode,categoria:'bebida_fechada',metodo_contagem:'bip'}).select('id,nome,codigo_barras').single();
     if(error)throw error;
-    byBar[data.codigo_barras]=data; byId[data.id]=data; itens.push(data);
+    byBar[data.codigo_barras]=data; byId[data.id]=data; itens.push(data); refreshDL();
     closeModal();
     bip(data);
   }catch(e){ alert('Erro ao cadastrar: '+e.message); }
 };
 
 // ---------- foto ----------
+function refreshDL(){ $('itensList').innerHTML=itens.map(i=>`<option value="${(i.nome||'').replace(/"/g,'&quot;')}">`).join(''); }
 function pickVia(btn){ document.querySelectorAll('#fTipo button').forEach(b=>b.classList.remove('on')); btn.classList.add('on'); curVia=btn.dataset.via;
   $('fGarrafaBox').classList.toggle('hidden', curVia!=='garrafa_peso');
-  $('fValLbl').textContent='Peso lido no visor (g)'; recalcLiquido(); }
+  $('fValLbl').textContent = curVia==='unidades_foto' ? 'Quantidade contada (unidades)' : 'Peso lido no visor (g)';
+  recalcLiquido(); }
 function recalcLiquido(){
   if(curVia!=='garrafa_peso'){ $('fLiquido').textContent=''; return; }
   const total=parseFloat(($('fVal').value||'').replace(',','.'));
@@ -315,7 +320,8 @@ $('fFile').onchange=async e=>{ fPhotoFile=e.target.files[0]; if(!fPhotoFile)retu
     const {error:eu}=await sb.storage.from('inventario').upload(path,fPhotoFile,{contentType:fPhotoFile.type||'image/jpeg',upsert:true});
     if(eu)throw eu;
     fPhotoUrl=sb.storage.from('inventario').getPublicUrl(path).data.publicUrl;
-    lerFotoIA();
+    if(curVia==='unidades_foto'){ $('fAi').className='feed ok'; $('fAi').textContent='📷 Foto ok — agora digita a quantidade contada.'; }
+    else lerFotoIA();
   }catch(e){ $('fAi').className='feed new'; $('fAi').textContent='⚠️ erro ao subir a foto: '+e.message; }
 };
 async function lerFotoIA(){
@@ -334,31 +340,34 @@ $('fSalvar').onclick=async()=>{
   if(!fPhotoUrl){alert('Tira a foto primeiro (e espera subir).');return;}
   const nome=$('fItem').value.trim(); if(!nome){alert('Escreve o que é (ex: Picanha).');return;}
   const garrafa = curVia==='garrafa_peso';
+  const unidades = curVia==='unidades_foto';
   const qtd = garrafa ? (parseInt($('fQtd').value)||1) : 1;
   const tara = garrafa ? (parseFloat(($('fTara').value||'').replace(',','.'))||null) : null;
   const total = $('fVal').value?parseFloat($('fVal').value.replace(',','.')):null;
+  if(unidades && (total==null || total<=0)){alert('Digita a quantidade contada.');return;}
   $('fSalvar').disabled=true; $('fSalvar').textContent='salvando…';
   try{
     let item=itens.find(i=>i.nome.toLowerCase()===nome.toLowerCase());
     const effTara = tara || (item&&item.tara_garrafa_g) || null;
     if(garrafa && !effTara){ alert('Garrafa nova: pesa 1 VAZIA deste produto e põe o peso no campo "garrafa vazia". Só nessa 1ª vez — depois fica automático.'); $('fSalvar').disabled=false; $('fSalvar').textContent='Salvar item ✓'; return; }
     if(!item){
-      const novo={casa_id:casaId,nome,categoria:(garrafa?'bebida_aberta':'insumo_cozinha'),metodo_contagem:curVia};
+      const novo={casa_id:casaId,nome,categoria:(garrafa?'bebida_aberta':(unidades?'unidades':'insumo_cozinha')),metodo_contagem:curVia};
       if(garrafa&&effTara) novo.tara_garrafa_g=effTara;
-      const {data,error}=await sb.from('inv_itens').insert(novo).select('id,nome,codigo_barras,tara_garrafa_g').single(); if(error)throw error; item=data; itens.push(item); byId[item.id]=item;
+      const {data,error}=await sb.from('inv_itens').insert(novo).select('id,nome,codigo_barras,tara_garrafa_g').single(); if(error)throw error; item=data; itens.push(item); byId[item.id]=item; refreshDL();
     } else if(garrafa&&tara&&item.tara_garrafa_g!==tara){
       await sb.from('inv_itens').update({tara_garrafa_g:tara}).eq('id',item.id); item.tara_garrafa_g=tara;
     }
     const liquido = (garrafa&&total!=null&&effTara!=null)?(total-effTara*qtd):null;
-    const iaVal = aiResult && typeof aiResult.valor==='number' ? aiResult.valor : null;
-    const row={contagem_id:contagemId,item_id:item.id,contado_via:curVia,foto_url:fPhotoUrl,quantidade:qtd,peso_g:total,
+    const iaVal = (!unidades && aiResult && typeof aiResult.valor==='number') ? aiResult.valor : null;
+    const row={contagem_id:contagemId,item_id:item.id,contado_via:curVia,foto_url:fPhotoUrl,
+      quantidade:(unidades?total:qtd), peso_g:(unidades?null:total),
       ia_valor_lido: iaVal,
-      ia_conferiu: !!(aiResult && !aiResult.erro && aiResult.legivel!==false),
-      ia_divergiu: !!(aiResult && iaVal!=null && total!=null && Math.abs(iaVal-total) > Math.max(2, total*0.05))};
+      ia_conferiu: !!(!unidades && aiResult && !aiResult.erro && aiResult.legivel!==false),
+      ia_divergiu: !!(!unidades && aiResult && iaVal!=null && total!=null && Math.abs(iaVal-total) > Math.max(2, total*0.05))};
     const {data:ci,error}=await sb.from('inv_contagem_itens').insert(row).select('id').single();
     if(error)throw error;
-    const label = garrafa ? `${item.nome} (${qtd} garrafa(s)${liquido!=null?', '+liquido.toFixed(0)+'g líq':''})` : `${item.nome}${total!=null?' ('+total+'g)':''}`;
-    state['foto_'+ci.id]={ci_id:ci.id,nome:label,via:curVia,quantidade:qtd,foto_url:fPhotoUrl};
+    const label = garrafa ? `${item.nome} (${qtd} garrafa(s)${liquido!=null?', '+liquido.toFixed(0)+'g líq':''})` : (unidades ? `${item.nome} (${total} un)` : `${item.nome}${total!=null?' ('+total+'g)':''}`);
+    state['foto_'+ci.id]={ci_id:ci.id,nome:label,via:curVia,quantidade:(unidades?total:qtd),foto_url:fPhotoUrl};
     $('fItem').value='';$('fVal').value='';$('fQtd').value='1';$('fTara').value='';$('fPrev').innerHTML='';$('fAi').textContent='';$('fLiquido').textContent='';$('fForm').classList.add('hidden');fPhotoFile=null;fPhotoUrl=null;aiResult=null;
     render();
   }catch(e){ alert('Erro: '+e.message); }
@@ -369,7 +378,7 @@ $('fSalvar').onclick=async()=>{
 function render(){
   const keys=Object.keys(state);
   $('list').innerHTML=keys.map(k=>{ const s=state[k]; const isBip=s.via==='bip';
-    const via = s.via==='bip'?'bipado':(s.via==='balanca_foto'?'foto balança':'foto garrafa');
+    const via = s.via==='bip'?'bipado':(s.via==='balanca_foto'?'foto balança':(s.via==='unidades_foto'?'unidades':'foto garrafa'));
     const val = s.quantidade==null?'—':s.quantidade;
     return `<div class="item">
       ${s.foto_url?`<img class="thumb" src="${s.foto_url}">`:''}
