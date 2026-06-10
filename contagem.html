@@ -44,6 +44,11 @@
   .seg button{flex:1;padding:12px;border-radius:10px;background:#21262d;border:1px solid var(--line);color:var(--txt);font-weight:600}
   .seg button.on{background:var(--blue);border-color:var(--blue);color:#fff}
   small{color:var(--dim)}
+  #toast{position:fixed;top:64px;left:50%;transform:translateX(-50%) scale(.9);background:#238636;color:#fff;
+    padding:14px 20px;border-radius:14px;font-weight:800;font-size:16px;z-index:80;max-width:90%;text-align:center;
+    box-shadow:0 6px 24px rgba(0,0,0,.5);opacity:0;pointer-events:none;transition:opacity .15s,transform .15s}
+  #toast.show{opacity:1;transform:translateX(-50%) scale(1)}
+  #toast.bad{background:#da3633}
 </style>
 </head>
 <body>
@@ -133,6 +138,8 @@
   </div>
 
 </div>
+
+<div id="toast"></div>
 
 <!-- modal código novo -->
 <div id="modal" class="modal hidden">
@@ -261,19 +268,27 @@ function closeModal(){
 }
 
 // ---------- bip ----------
+let toastT=null;
+function toast(msg,bad){ const t=$('toast'); t.textContent=msg; t.classList.toggle('bad',!!bad);
+  t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'), bad?2600:1500); }
+function beep(ok){ try{ const a=new (window.AudioContext||window.webkitAudioContext)();
+  const o=a.createOscillator(), g=a.createGain(); o.connect(g); g.connect(a.destination);
+  o.frequency.value = ok?880:220; g.gain.value=.2; o.start(); o.stop(a.currentTime+(ok?.12:.4));
+  setTimeout(()=>a.close(),600); }catch(e){} }
 async function bip(item){
   let s=state[item.id];
   try{
-    if(s){ s.bips++; s.quantidade=s.bips; await sb.from('inv_contagem_itens').update({bips:s.bips,quantidade:s.bips}).eq('id',s.ci_id); }
+    if(s){ s.bips++; s.quantidade=s.bips; const {error}=await sb.from('inv_contagem_itens').update({bips:s.bips,quantidade:s.bips}).eq('id',s.ci_id); if(error)throw error; }
     else{
       const {data,error}=await sb.from('inv_contagem_itens').insert({contagem_id:contagemId,item_id:item.id,contado_via:'bip',bips:1,quantidade:1}).select('id').single();
       if(error)throw error;
       state[item.id]={ci_id:data.id,nome:item.nome,via:'bip',bips:1,quantidade:1};
     }
     const q=state[item.id].quantidade;
+    beep(true); toast(`✅ ${item.nome} — total ${q} no estoque`);
     feed('ok',`✓ ${item.nome} — total ${q}`);
     render();
-  }catch(e){ feed('new','erro: '+e.message); }
+  }catch(e){ beep(false); toast('⚠️ NÃO GRAVOU! Bipa de novo. ('+e.message+')',true); feed('new','erro: '+e.message); }
 }
 function feed(cls,msg){ const f=$('feed'); f.className='feed '+cls; f.textContent=msg; }
 
